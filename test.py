@@ -1,35 +1,98 @@
-import pickle
 import sys
+import time
+import pickle
+import datetime
+
+import screeninfo
 import socket
 import numpy as np
 
 from cv2 import cv2
 from mss import mss
+from zlib import decompress
+from PIL import Image
+from PIL.ImageQt import ImageQt
+
 from PyQt5.QtCore import pyqtSignal, pyqtSlot, Qt, QThread
 from PyQt5 import QtGui
 from PyQt5.QtWidgets import QWidget, QApplication, QLabel, QVBoxLayout
 from PyQt5.QtGui import QPixmap
 
 
-class VideoThread(QThread):
-    change_pixmap_signal = pyqtSignal(np.ndarray)
+def recvall(conn, length):
+    buf = b''
+    while len(buf) < length:
+        data = conn.recv(min(4096, length - len(buf)))
+        if not data:
+            return data
+        buf += data
+    return buf
 
-    def __init__(self, sock):
+
+def initSocket():
+    sock = socket.socket()
+    sock.bind(('', 9090))
+    sock.listen()
+    return sock
+
+
+def check_time(description):
+    def decorator(func):
+        def wrapper(*args, **kwargs):
+            start = time.time()
+            return_value = func(*args, **kwargs)
+            end = time.time()
+
+            print(f'{func.__name__} completed - {end - start}s')
+
+            return return_value
+        return wrapper
+    return decorator
+
+
+class ScreenSharingThread(QThread):
+    change_pixmap_signal = pyqtSignal(bytes)
+
+    def __init__(self):
         super().__init__()
         self._run_flag = True
-        self.sock = sock
 
     def run(self):
-        while self._run_flag:
-            conn, addr = self.sock.accept()
-            data = b''
-            while True:
-                buffer_data = conn.recv(100000)
-                if not buffer_data:
-                    break
-                data += buffer_data
-            data = pickle.loads(data)
-            self.change_pixmap_signal.emit(data)
+        sock = initSocket()
+        conn, addr = sock.accept()
+
+        # second_start = time.time()
+        # second_frames = 0
+
+        @check_time('receive_pixels')
+        def receive_pixels():
+            size_len = int.from_bytes(conn.recv(1), byteorder='big')
+            size = int.from_bytes(conn.recv(size_len), byteorder='big')
+            compressed_pixels = recvall(conn, size)
+            return compressed_pixels
+
+        @check_time('decompress_pixels')
+        def decompress_pixels(compressed_pixels):
+            return decompress(compressed_pixels)
+
+        @check_time('change_pixmap')
+        def change_pixmap():
+            self.change_pixmap_signal.emit(pixels)
+
+        try:
+            while self._run_flag:
+                pixels = receive_pixels()
+                pixels = decompress_pixels(pixels)
+                change_pixmap()
+
+                # second_frames += 1
+                # check_time = time.time()
+                # if check_time - second_start >= 1:
+                #     print(f'FPS={second_frames}')
+                #     second_frames = 0
+                #     second_start = time.time()
+        finally:
+            sock.close()
 
     def stop(self):
         """Sets run flag to False and waits for thread to finish"""
@@ -38,28 +101,24 @@ class VideoThread(QThread):
 
 
 class App(QWidget):
-    def __init__(self, sock):
+    def __init__(self):
         super().__init__()
-        self.sock = sock
-
         self.setWindowTitle("Qt live label demo")
-        self.disply_width = 1000
-        self.display_height = 1000
+        self.resize(1200, 800)
+
         # create the label that holds the image
         self.image_label = QLabel(self)
-        self.image_label.resize(self.disply_width, self.display_height)
-        # create a text label
-        self.textLabel = QLabel('Webcam')
+        self.image_label.resize(1000, 700)
+        # self.image_label.setMinimumSize(1, 1)
 
         # create a vertical box layout and add the two labels
         vbox = QVBoxLayout()
         vbox.addWidget(self.image_label)
-        vbox.addWidget(self.textLabel)
         # set the vbox layout as the widgets layout
         self.setLayout(vbox)
 
         # create the video capture thread
-        self.thread = VideoThread(self.sock)
+        self.thread = ScreenSharingThread()
         # connect its signal to the update_image slot
         self.thread.change_pixmap_signal.connect(self.update_image)
         # start the thread
@@ -69,34 +128,26 @@ class App(QWidget):
         self.thread.stop()
         event.accept()
 
-    @pyqtSlot(np.ndarray)
-    def update_image(self, cv_img):
+    @pyqtSlot(bytes)
+    def update_image(self, pixels):
         """Updates the image_label with a new opencv image"""
-        qt_img = self.convert_cv_qt(cv_img)
-        self.image_label.setPixmap(qt_img)
+        qpixmap = self.convert_pixels_to_qpixmap(pixels)
+        self.image_label.setPixmap(qpixmap)
 
-    def convert_cv_qt(self, cv_img):
-        """Convert from an opencv image to QPixmap"""
-        rgb_image = cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB)
-        h, w, ch = rgb_image.shape
-        bytes_per_line = ch * w
-        convert_to_Qt_format = QtGui.QImage(rgb_image.data, w, h, bytes_per_line, QtGui.QImage.Format_RGB888)
-        p = convert_to_Qt_format.scaled(self.disply_width, self.display_height, Qt.KeepAspectRatio)
-        return QPixmap.fromImage(p)
-
-
-def initSocket():
-    sock = socket.socket()
-    sock.bind(('', 9090))
-    sock.listen(1)
-    return sock
+    def convert_pixels_to_qpixmap(self, pixels):
+        # img = Image.frombytes('RGB', (1200, 720), pixels, 'raw', 'BGRX').tobytes()
+        img = Image.frombytes('RGB', (1200, 720), pixels, 'raw', 'BGRX').tobytes()
+        img = QtGui.QImage(img, 1200, 720, QtGui.QImage.Format_RGB888)
+        img = img.scaled(self.image_label.width(), self.image_label.height(), Qt.KeepAspectRatio)
+        # qt_img = QtGui.QImage(img.to, 1920, 1080, QtGui.QImage.Format_RGB)
+        # p = convert_to_Qt_format.scaled(self.image_label.width(), self.image_label.height(), Qt.KeepAspectRatio)
+        # return QPixmap.fromImage(qt_img)
+        return QPixmap.fromImage(img)
 
 
 def main():
-    sock = initSocket()
-
     app = QApplication(sys.argv)
-    a = App(sock)
+    a = App()
     a.show()
     sys.exit(app.exec_())
 
