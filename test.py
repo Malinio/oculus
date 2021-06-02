@@ -6,17 +6,37 @@ import datetime
 import screeninfo
 import socket
 import numpy as np
+import logging
 
 from cv2 import cv2
 from mss import mss
 from zlib import decompress
 from PIL import Image
 from PIL.ImageQt import ImageQt
+from collections import defaultdict
 
 from PyQt5.QtCore import pyqtSignal, pyqtSlot, Qt, QThread
 from PyQt5 import QtGui
 from PyQt5.QtWidgets import QWidget, QApplication, QLabel, QVBoxLayout
 from PyQt5.QtGui import QPixmap
+
+
+logFormatter = logging.Formatter(
+    '%(asctime)s.%(msecs)d %(message)s',
+    datefmt='%Y-%m-%dT%H:%M:%S',
+)
+LOGGER = logging.getLogger()
+LOGGER.setLevel(logging.INFO)
+
+fileHandler = logging.FileHandler('logs/screen_share_oculus.log', mode='w')
+fileHandler.setFormatter(logFormatter)
+LOGGER.addHandler(fileHandler)
+
+consoleHandler = logging.StreamHandler()
+consoleHandler.setFormatter(logFormatter)
+LOGGER.addHandler(consoleHandler)
+
+FRAME_NUM = 0
 
 
 def recvall(conn, length):
@@ -36,14 +56,14 @@ def initSocket():
     return sock
 
 
-def check_time(description):
+def check_time():
     def decorator(func):
         def wrapper(*args, **kwargs):
             start = time.time()
             return_value = func(*args, **kwargs)
             end = time.time()
 
-            print(f'{func.__name__} completed - {end - start}s')
+            LOGGER.info(f'oculus:{func.__name__}:{(end - start) * 100:.2f}ms:{FRAME_NUM}')
 
             return return_value
         return wrapper
@@ -58,29 +78,32 @@ class ScreenSharingThread(QThread):
         self._run_flag = True
 
     def run(self):
+        global FRAME_NUM
+
         sock = initSocket()
         conn, addr = sock.accept()
 
         # second_start = time.time()
         # second_frames = 0
 
-        @check_time('receive_pixels')
+        @check_time()
         def receive_pixels():
             size_len = int.from_bytes(conn.recv(1), byteorder='big')
             size = int.from_bytes(conn.recv(size_len), byteorder='big')
             compressed_pixels = recvall(conn, size)
             return compressed_pixels
 
-        @check_time('decompress_pixels')
+        @check_time()
         def decompress_pixels(compressed_pixels):
             return decompress(compressed_pixels)
 
-        @check_time('change_pixmap')
+        @check_time()
         def change_pixmap():
             self.change_pixmap_signal.emit(pixels)
 
         try:
             while self._run_flag:
+                FRAME_NUM += 1
                 pixels = receive_pixels()
                 pixels = decompress_pixels(pixels)
                 change_pixmap()
