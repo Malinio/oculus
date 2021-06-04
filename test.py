@@ -1,3 +1,4 @@
+import struct
 import sys
 import time
 import pickle
@@ -34,40 +35,28 @@ LOGGER.addHandler(fileHandler)
 
 consoleHandler = logging.StreamHandler()
 consoleHandler.setFormatter(logFormatter)
-LOGGER.addHandler(consoleHandler)
+# LOGGER.addHandler(consoleHandler)
 
 FRAME_NUM = 0
 
 
-def recvall(conn, length):
-    buf = b''
-    while len(buf) < length:
-        data = conn.recv(min(4096, length - len(buf)))
-        if not data:
-            return data
-        buf += data
-    return buf
-
-
 def initSocket():
-    sock = socket.socket()
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.bind(('', 9090))
     sock.listen()
     return sock
 
 
-def check_time():
-    def decorator(func):
-        def wrapper(*args, **kwargs):
-            start = time.time()
-            return_value = func(*args, **kwargs)
-            end = time.time()
+def check_time(func):
+    def wrapper(*args, **kwargs):
+        start = time.time()
+        return_value = func(*args, **kwargs)
+        end = time.time()
 
-            LOGGER.info(f'oculus:{func.__name__}:{(end - start) * 100:.2f}ms:{FRAME_NUM}')
+        LOGGER.info(f'oculus:{func.__name__}:{(end - start) * 100:.2f}ms:{FRAME_NUM}')
 
-            return return_value
-        return wrapper
-    return decorator
+        return return_value
+    return wrapper
 
 
 class ScreenSharingThread(QThread):
@@ -86,18 +75,29 @@ class ScreenSharingThread(QThread):
         # second_start = time.time()
         # second_frames = 0
 
-        @check_time()
+        @check_time
         def receive_pixels():
             size_len = int.from_bytes(conn.recv(1), byteorder='big')
             size = int.from_bytes(conn.recv(size_len), byteorder='big')
             compressed_pixels = recvall(conn, size)
             return compressed_pixels
 
-        @check_time()
+            while len(data) < msg_size:
+                data += conn.recv(4096)
+
+            frame_data = data[:msg_size]
+            data = data[msg_size:]
+
+            frame = pickle.loads(frame_data, fix_imports=True, encoding='bytes')
+            frame = cv2.imdecode(frame, cv2.IMREAD_COLOR)
+
+            return frame
+
+        @check_time
         def decompress_pixels(compressed_pixels):
             return decompress(compressed_pixels)
 
-        @check_time()
+        @check_time
         def change_pixmap():
             self.change_pixmap_signal.emit(pixels)
 
@@ -151,7 +151,7 @@ class App(QWidget):
         self.thread.stop()
         event.accept()
 
-    @pyqtSlot(bytes)
+    @pyqtSlot(np.ndarray)
     def update_image(self, pixels):
         """Updates the image_label with a new opencv image"""
         qpixmap = self.convert_pixels_to_qpixmap(pixels)
@@ -159,8 +159,7 @@ class App(QWidget):
 
     def convert_pixels_to_qpixmap(self, pixels):
         # img = Image.frombytes('RGB', (1200, 720), pixels, 'raw', 'BGRX').tobytes()
-        img = Image.frombytes('RGB', (1200, 720), pixels, 'raw', 'BGRX').tobytes()
-        img = QtGui.QImage(img, 1200, 720, QtGui.QImage.Format_RGB888)
+        img = QtGui.QImage(pixels, 1200, 720, QtGui.QImage.Format_RGB888)
         img = img.scaled(self.image_label.width(), self.image_label.height(), Qt.KeepAspectRatio)
         # qt_img = QtGui.QImage(img.to, 1920, 1080, QtGui.QImage.Format_RGB)
         # p = convert_to_Qt_format.scaled(self.image_label.width(), self.image_label.height(), Qt.KeepAspectRatio)
