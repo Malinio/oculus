@@ -1,4 +1,4 @@
-import os
+import sys
 import time
 import struct
 
@@ -8,6 +8,11 @@ import logging
 
 from cv2 import cv2
 from threading import Thread
+
+from PyQt5.QtCore import pyqtSlot, Qt
+from PyQt5 import QtGui
+from PyQt5.QtWidgets import QWidget, QApplication, QLabel, QVBoxLayout
+from PyQt5.QtGui import QPixmap
 
 
 logFormatter = logging.Formatter(
@@ -67,11 +72,12 @@ def convert_frame_bytes_to_arr(frame_bytes):
     return frame_arr
 
 
-def show_frame(frame_arr):
-    cv2.imshow('Victima', frame_arr)
+def show_frame(app, frame_arr):
+    app.update_frame(frame_arr)
+    # cv2.imshow('Victima', frame_arr)
 
 
-def screen_receiving(sock):
+def screen_receiving(sock, app):
     conn, addr = sock.accept()
 
     last_time = time.time()
@@ -80,7 +86,7 @@ def screen_receiving(sock):
     while True:
         frame_bytes = receive_frame(conn)
         frame_arr = convert_frame_bytes_to_arr(frame_bytes)
-        show_frame(frame_arr)
+        show_frame(app, frame_arr)
 
         if cv2.waitKey(1) & 0xFF == ord('q'):
             sock.close()
@@ -93,10 +99,39 @@ def screen_receiving(sock):
             fps = 0
 
 
+class App(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Qt live label demo")
+        self.resize(1200, 800)
+
+        self.image_label = QLabel(self)
+        self.image_label.resize(1000, 700)
+
+        vbox = QVBoxLayout()
+        vbox.addWidget(self.image_label)
+        self.setLayout(vbox)
+
+    def update_frame(self, frame_arr):
+        pixmap = self.convert_pixels_to_pixmap(frame_arr)
+        self.image_label.setPixmap(pixmap)
+
+    def convert_pixels_to_pixmap(self, frame_arr):
+        img = QtGui.QImage(frame_arr, 1200, 720, QtGui.QImage.Format_RGB888)
+        img = img.scaled(self.image_label.width(), self.image_label.height(), Qt.KeepAspectRatio)
+        return QPixmap.fromImage(img)
+
+
 def main(host='', port=9090):
+    app_top = QApplication(sys.argv)
+    app = App()
+
     sock = init_socket(host, port)
-    screen_receiving_thread = Thread(target=screen_receiving, args=(sock,))
+    screen_receiving_thread = Thread(target=screen_receiving, args=(sock, app))
     screen_receiving_thread.start()
+
+    app.show()
+    sys.exit(app_top.exec_())
 
 
 if __name__ == '__main__':
