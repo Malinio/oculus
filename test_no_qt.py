@@ -83,6 +83,7 @@ def screen_receiving(sock):
         show_frame(frame_arr)
 
         if cv2.waitKey(1) & 0xFF == ord('q'):
+            sock.close()
             break
 
         fps += 1
