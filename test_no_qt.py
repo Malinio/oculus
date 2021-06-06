@@ -9,7 +9,7 @@ import logging
 from cv2 import cv2
 from threading import Thread
 
-from PyQt5.QtCore import pyqtSlot, Qt
+from PyQt5.QtCore import Qt
 from PyQt5 import QtGui
 from PyQt5.QtWidgets import QWidget, QApplication, QLabel, QVBoxLayout
 from PyQt5.QtGui import QPixmap
@@ -88,9 +88,9 @@ def screen_receiving(sock, app):
         frame_arr = convert_frame_bytes_to_arr(frame_bytes)
         show_frame(app, frame_arr)
 
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            sock.close()
-            break
+        # if cv2.waitKey(1) & 0xFF == ord('q'):
+        #     sock.close()
+        #     break
 
         fps += 1
         if time.time() - last_time >= 1:
